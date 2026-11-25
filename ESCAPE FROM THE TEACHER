@@ -1,0 +1,405 @@
+
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESCAPE FROM THE HORROR TEACHER</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#050807;color:white;font-family:Arial;overflow:hidden}
+canvas{display:block;width:100vw;height:100vh}
+#menu{
+ position:fixed;inset:0;z-index:5;background:#07140e;
+ display:flex;align-items:center;justify-content:center;
+ flex-direction:column;text-align:center;
+}
+.board{
+ border:12px solid #604329;background:#16452d;
+ padding:45px 25px;width:min(850px,92vw);
+ box-shadow:inset 0 0 35px #06140c,0 0 50px black;
+}
+h1{font-family:Georgia;color:#e6e4d5;font-size:clamp(30px,6vw,65px);
+ text-shadow:2px 3px #999;line-height:1.15}
+.subtitle{color:#d5d0b8;letter-spacing:5px}
+button{
+ background:#a52b25;color:white;border:3px solid #e2d5b4;
+ padding:16px 50px;font-size:22px;font-weight:bold;
+ cursor:pointer;margin:20px;
+}
+button:hover{background:#d13b30}
+#hud{
+ position:fixed;top:15px;left:15px;right:15px;
+ display:none;justify-content:space-between;
+ pointer-events:none;text-shadow:2px 2px black;
+ font-weight:bold;font-size:18px;
+}
+#message{
+ position:fixed;bottom:12%;left:50%;transform:translateX(-50%);
+ background:#000b;padding:15px 25px;display:none;
+ text-align:center;border:1px solid #aaa;
+}
+#cross{position:fixed;top:50%;left:50%;display:none;
+ transform:translate(-50%,-50%);font-size:24px;color:white}
+#pause{
+ display:none;position:fixed;inset:0;background:#000c;
+ align-items:center;justify-content:center;flex-direction:column;
+ z-index:4;
+}
+</style>
+</head>
+<body>
+
+<div id="menu">
+ <div class="board">
+  <div class="subtitle">AN UNFORGETTABLE SCHOOL NIGHT</div>
+  <h1>ESCAPE FROM THE<br>HORROR TEACHER</h1>
+  <p style="color:#eee">LEVEL 1 – THE ABANDONED SCHOOL</p>
+  <p style="color:#ccc">Finde die 6 geheimen Dokumente.<br>
+  Vermeide den mutierten Lehrer. Überlebe die Nacht.</p>
+  <button onclick="startGame()">START GAME</button>
+  <p style="color:#aaa;font-size:12px">WASD: BEWEGEN · MAUS: UMSCHAUEN · E: INTERAGIEREN · SHIFT: RENNEN</p>
+ </div>
+</div>
+
+<div id="hud">
+ <div>📄 DOKUMENTE: <span id="count">0</span>/6</div>
+ <div>LEVEL 1 – ABANDONED SCHOOL</div>
+ <div id="danger">STATUS: NORMAL</div>
+</div>
+<div id="cross">+</div>
+<div id="message"></div>
+<div id="pause">
+ <h1>PAUSE</h1>
+ <button onclick="resumeGame()">WEITERSPIELEN</button>
+ <button onclick="location.reload()">HAUPTMENÜ</button>
+</div>
+
+<canvas id="game"></canvas>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+
+function resize(){
+ canvas.width=window.innerWidth;
+ canvas.height=window.innerHeight;
+}
+resize();
+window.addEventListener("resize",resize);
+
+const raw=[
+"###############",
+"#.....#.......#",
+"#.D...#..D....#",
+"#.....#.......#",
+"###D###.###D###",
+"#.....#.......#",
+"#..D..D..D....#",
+"#.....#.......#",
+"#.....###.#####",
+"#.....#.......#",
+"#..D..#..D....#",
+"#.....#.......#",
+"#.............#",
+"#.............#",
+"###############"
+];
+
+const map=raw.map(r=>r.split(""));
+const doors=[];
+for(let y=0;y<map.length;y++)
+ for(let x=0;x<map[y].length;x++)
+  if(map[y][x]==="D")doors.push({x,y,open:false});
+
+let player={x:1.5,y:1.5,angle:0};
+let monster={x:12.5,y:12.5,active:false};
+let documents=[
+ {x:4.5,y:2.5,found:false},
+ {x:10.5,y:2.5,found:false},
+ {x:4.5,y:5.5,found:false},
+ {x:10.5,y:5.5,found:false},
+ {x:4.5,y:10.5,found:false},
+ {x:10.5,y:10.5,found:false}
+];
+
+let keys={};
+let running=false;
+let paused=false;
+let lastTime=0;
+let messageTimer=0;
+let collected=0;
+let gameOver=false;
+let win=false;
+let zBuffer=[];
+
+function doorAt(x,y){
+ return doors.find(d=>d.x===x&&d.y===y);
+}
+
+function solid(x,y){
+ let mx=Math.floor(x),my=Math.floor(y);
+ if(!map[my]||!map[my][mx])return true;
+ if(map[my][mx]==="#")return true;
+ let d=doorAt(mx,my);
+ return d?!d.open:false;
+}
+
+function canMove(x,y){
+ const r=.19;
+ return !solid(x-r,y-r)&&!solid(x+r,y-r)&&
+ !solid(x-r,y+r)&&!solid(x+r,y+r);
+}
+
+function say(t){
+ const el=document.getElementById("message");
+ el.innerText=t;
+ el.style.display="block";
+ messageTimer=2.5;
+}
+
+function startGame(){
+ document.getElementById("menu").style.display="none";
+ document.getElementById("hud").style.display="flex";
+ document.getElementById("cross").style.display="block";
+ running=true;
+ monster.active=true;
+ canvas.requestPointerLock?.();
+ lastTime=performance.now();
+ requestAnimationFrame(loop);
+}
+
+function resumeGame(){
+ paused=false;
+ document.getElementById("pause").style.display="none";
+ canvas.requestPointerLock?.();
+ lastTime=performance.now();
+ requestAnimationFrame(loop);
+}
+
+document.addEventListener("keydown",e=>{
+ keys[e.key.toLowerCase()]=true;
+ if(e.key.toLowerCase()==="e"&&running&&!paused)interact();
+ if(e.key==="Escape"&&running&&!gameOver&&!win){
+  paused=!paused;
+  document.getElementById("pause").style.display=paused?"flex":"none";
+  if(paused)document.exitPointerLock?.();
+  else resumeGame();
+ }
+});
+document.addEventListener("keyup",e=>keys[e.key.toLowerCase()]=false);
+
+document.addEventListener("mousemove",e=>{
+ if(document.pointerLockElement===canvas&&running&&!paused)
+  player.angle+=e.movementX*.0025;
+});
+
+function interact(){
+ let nearest=null,dist=1.5;
+
+ for(const d of doors){
+  let dx=d.x+.5-player.x,dy=d.y+.5-player.y;
+  let v=Math.hypot(dx,dy);
+  if(v<dist){dist=v;nearest=d}
+ }
+ if(nearest){
+  nearest.open=!nearest.open;
+  say(nearest.open?"Tür geöffnet":"Tür geschlossen");
+  return;
+ }
+
+ let doc=documents.find(d=>!d.found&&
+ Math.hypot(d.x-player.x,d.y-player.y)<1.5);
+ if(doc){
+  doc.found=true;
+  collected++;
+  document.getElementById("count").innerText=collected;
+  say("DOKUMENT GEFUNDEN! ("+collected+"/6)");
+  if(collected===6)say("ALLE DOKUMENTE GEFUNDEN! Finde den Ausgang!");
+  return;
+ }
+
+ say("Hier gibt es nichts.");
+}
+
+function movePlayer(dt){
+ let speed=(keys["shift"]?3.5:2.15)*dt;
+ let dx=0,dy=0;
+ if(keys["w"]){dx+=Math.cos(player.angle)*speed;dy+=Math.sin(player.angle)*speed}
+ if(keys["s"]){dx-=Math.cos(player.angle)*speed;dy-=Math.sin(player.angle)*speed}
+ if(keys["a"]){dx+=Math.cos(player.angle-Math.PI/2)*speed;dy+=Math.sin(player.angle-Math.PI/2)*speed}
+ if(keys["d"]){dx+=Math.cos(player.angle+Math.PI/2)*speed;dy+=Math.sin(player.angle+Math.PI/2)*speed}
+ if(canMove(player.x+dx,player.y))player.x+=dx;
+ if(canMove(player.x,player.y+dy))player.y+=dy;
+}
+
+function updateMonster(dt){
+ if(!monster.active)return;
+ const dx=player.x-monster.x,dy=player.y-monster.y;
+ const dist=Math.hypot(dx,dy);
+ if(dist<8)document.getElementById("danger").innerText="⚠ GEFAHR!";
+ else document.getElementById("danger").innerText="STATUS: NORMAL";
+
+ if(dist>0.55){
+  const speed=(dist<5?1.25:.8)*dt;
+  const nx=monster.x+dx/dist*speed;
+  const ny=monster.y+dy/dist*speed;
+  if(canMove(nx,monster.y))monster.x=nx;
+  if(canMove(monster.x,ny))monster.y=ny;
+ }
+ if(dist<.48){
+  gameOver=true;
+  endScreen("DU WURDEST ERWISCHT","Der Horror Teacher hat dich gefunden.");
+ }
+}
+
+function castRay(angle){
+ let x=player.x,y=player.y;
+ let dx=Math.cos(angle),dy=Math.sin(angle);
+ let distance=0;
+ while(distance<20){
+  x+=dx*.025;y+=dy*.025;distance+=.025;
+  if(solid(x,y))return distance;
+ }
+ return 20;
+}
+
+function render(){
+ const w=canvas.width,h=canvas.height;
+ ctx.fillStyle="#252323";
+ ctx.fillRect(0,0,w,h/2);
+ ctx.fillStyle="#11100e";
+ ctx.fillRect(0,h/2,w,h/2);
+
+ // Boden und Decke
+ for(let i=0;i<80;i++){
+  let y=h/2+i*h/160;
+  ctx.fillStyle=`rgba(80,75,65,${i/130})`;
+  ctx.fillRect(0,y,w,3);
+ }
+
+ const fov=Math.PI/3;
+ const rays=Math.min(w,1000);
+ zBuffer=new Array(rays);
+
+ for(let i=0;i<rays;i++){
+  const angle=player.angle-fov/2+(i/rays)*fov;
+  let dist=castRay(angle);
+  dist*=Math.cos(angle-player.angle);
+  zBuffer[i]=dist;
+
+  const wallHeight=Math.min(h,h/(dist+.001));
+  const shade=Math.max(15,155-dist*13);
+  const x=i*w/rays;
+  const d=doorAt(Math.floor(player.x+Math.cos(angle)*dist),
+                 Math.floor(player.y+Math.sin(angle)*dist));
+  ctx.fillStyle=d?"#543b30":`rgb(${shade*.72},${shade*.7},${shade*.58})`;
+  ctx.fillRect(x,h/2-wallHeight/2,w/rays+1,wallHeight);
+
+  if(d){
+   ctx.fillStyle="#ad9470";
+   ctx.fillRect(x,h/2-wallHeight/2,w/rays+1,2);
+  }
+ }
+ drawSprites(w,h,fov,rays);
+ drawVignette(w,h);
+}
+
+function drawSprites(w,h,fov,rays){
+ let sprites=[];
+ documents.forEach(d=>{
+  if(!d.found)sprites.push({...d,type:"doc"});
+ });
+ sprites.push({...monster,type:"monster"});
+ sprites.sort((a,b)=>
+  Math.hypot(b.x-player.x,b.y-player.y)-
+  Math.hypot(a.x-player.x,a.y-player.y));
+
+ for(const s of sprites){
+  let dx=s.x-player.x,dy=s.y-player.y;
+  let dist=Math.hypot(dx,dy);
+  let angle=Math.atan2(dy,dx)-player.angle;
+  while(angle>Math.PI)angle-=Math.PI*2;
+  while(angle<-Math.PI)angle+=Math.PI*2;
+  if(Math.abs(angle)>fov/2+.25)continue;
+
+  const screenX=(.5+angle/fov)*w;
+  const size=Math.min(h,h/(dist+.001)*(s.type==="monster"?.9:.22));
+  const start=Math.floor(screenX/w*rays);
+  if(zBuffer[start]&&dist>zBuffer[start]+.3)continue;
+
+  if(s.type==="doc"){
+   ctx.fillStyle="#e4d9b6";
+   ctx.fillRect(screenX-size*.3,h/2-size*.5,size*.6,size);
+   ctx.fillStyle="#6e1717";
+   ctx.fillRect(screenX-size*.2,h/2-size*.3,size*.4,3);
+   ctx.fillStyle="#555";
+   for(let j=0;j<4;j++)ctx.fillRect(screenX-size*.2,h/2-size*.15+j*size*.12,size*.4,2);
+  }else{
+   const y=h/2-size*.1;
+   // Körper
+   ctx.fillStyle="#222";
+   ctx.fillRect(screenX-size*.3,y,size*.6,size*.8);
+   // Kopf
+   ctx.fillStyle="#b3a18a";
+   ctx.beginPath();
+   ctx.arc(screenX,y-size*.12,size*.23,0,Math.PI*2);
+   ctx.fill();
+   // Augen
+   ctx.fillStyle="#b90000";
+   ctx.fillRect(screenX-size*.13,y-size*.16,size*.07,size*.04);
+   ctx.fillRect(screenX+size*.06,y-size*.16,size*.07,size*.04);
+   // Baseballschläger
+   ctx.strokeStyle="#98643c";
+   ctx.lineWidth=Math.max(3,size*.07);
+   ctx.beginPath();
+   ctx.moveTo(screenX+size*.25,y+size*.25);
+   ctx.lineTo(screenX+size*.55,y-size*.25);
+   ctx.stroke();
+  }
+ }
+}
+
+function drawVignette(w,h){
+ const g=ctx.createRadialGradient(w/2,h/2,h*.1,w/2,h/2,h*.8);
+ g.addColorStop(0,"transparent");
+ g.addColorStop(1,"rgba(0,0,0,.8)");
+ ctx.fillStyle=g;
+ ctx.fillRect(0,0,w,h);
+}
+
+function endScreen(title,desc){
+ running=false;
+ document.exitPointerLock?.();
+ document.getElementById("menu").style.display="flex";
+ document.querySelector(".board").innerHTML=
+ `<h1>${title}</h1><p>${desc}</p>
+ <p>Dokumente: ${collected}/6</p>
+ <button onclick="location.reload()">ERNEUT VERSUCHEN</button>`;
+}
+
+function checkExit(){
+ // Ausgang im südöstlichen Bereich
+ if(player.x>12&&player.y>12&&collected===6){
+  win=true;
+  endScreen("LEVEL 1 GESCHAFFT","Du hast die Dokumente gefunden. Aber das war erst der Anfang...");
+ }
+}
+
+function loop(now){
+ if(!running||paused||gameOver||win)return;
+ const dt=Math.min((now-lastTime)/1000,.05);
+ lastTime=now;
+ movePlayer(dt);
+ updateMonster(dt);
+ checkExit();
+ if(messageTimer>0){
+  messageTimer-=dt;
+  if(messageTimer<=0)document.getElementById("message").style.display="none";
+ }
+ render();
+ requestAnimationFrame(loop);
+}
+</script>
+</body>
+</html>
